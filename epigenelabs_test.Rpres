@@ -3,27 +3,277 @@ epigenelabs_test
 author: Yanis Touzani 
 date: 24.12.2019
 autosize: true
-
-First Slide
+transcriptomic analysis
 ========================================================
 
-For more details on authoring R presentations please visit <https://support.rstudio.com/hc/en-us/articles/200486468>.
+Tumorigenic breast cancer cells CD44+/CD24-/low are resistant to chemotherapy ?
 
-- Bullet 1
-- Bullet 2
-- Bullet 3
 
-Slide With Code
+Experiment = Expression profiling by array
+=======================================================
+- Paired breast cancer core biopsies before and after neoadjuvant chemotherapy
+- Compare Global gene expression differences : (CD44+/CD24−/low or formed cancer MSs) VS non-tumor-initiating cells (all “other” flow-sorted fractions or bulk tumor, respectively)
+
+
+
+
+
+Bioconductor : deal with Biological Data
 ========================================================
-bon bizu de pres
-```{r, echo=FALSE}
-summary(cars)
-print(1+1)
+
+```{r, echo=TRUE}
+library(limma)
+library(GEOquery)
+library(oligo)
+library(gplots)
+library(annotate)
+library(topGO)
+library(genefilter)
+library(hgu133plus2.db)
+library(ggplot2)
+library(wesanderson)
+library(pd.hg.u133.plus.2)
+library(xtable)
+
 ```
 
-Slide With Plot
-========================================================
 
-```{r, echo=FALSE}
-plot(cars)
+Dowloading GEO data
+========================================================
+```{r}
+setwd('/Users/massenaimmo/Documents')
+getGEOSuppFiles(GEO = "GSE7513", makeDirectory = TRUE, baseDir = '/Users/massenaimmo/Documents')
+untar("/users/massenaimmo/Documents/GSE7513/GSE7513_RAW.tar", exdir = "/Users/massenaimmo/Documents/GSE7513")
+
 ```
+
+
+Processing Affy microarray data
+=======
+```{r,echo = T, results = 'hide'}
+celfilelist<-list.files(path = "/users/massenaimmo/Documents/GSE7513/", pattern = ".CEL", full.names = TRUE)
+cf<-read.celfiles(filenames = celfilelist)
+
+```
+
+Information about the chip : "pd.hg.u133.plus.2"
+====
+```{r}
+print(class(cf))
+print(cf)
+```
+
+Before normalization
+=====
+```{r}
+hist(cf) 
+boxplot(cf)
+```
+
+After normalization
+===
+- correct background noise
+- correct differences between measurements that are not true biological variations
+```{r}
+cf.norm<-rma(object = cf)
+hist(cf.norm)
+boxplot(cf.norm)
+```
+
+Processing Illumina microarray data
+=====
+```{r}
+il<-read.ilmn(files = "/Users/massenaimmo/Documents/probe profile.txt", ctrlfiles = "/Users/massenaimmo/Documents/control probe profile.txt", sep = "\t")
+print(class(il))
+il.norm<-neqc(il)
+```
+
+Un-normalized vs quantile-normalization
+====
+```{r}
+boxplot(log2(il$E), ylim=c(2, 17), col = colorRampPalette(wes_palette("GrandBudapest1"))(16))
+boxplot(il.norm$E, ylim=c(2, 17), col = colorRampPalette(wes_palette("GrandBudapest1"))(16))
+```
+
+Filtering
+=====
+filter allows us to find genes that are really differentially expressed
+our example : we remove all probes < log2(100) expression in more than 20% of samples and have an inter-quartile < 0.25.
+
+```{r,echo=TRUE}
+filter<-genefilter(cf.norm, filterfun(pOverA(p = 0.2, A = log2(100)), function(x) (IQR(x) > 0.25))) 
+cf.norm<-cf.norm[filter,]
+table(filter)
+```
+
+To make comparisons between groups : Matrix
+===
+```{r}
+s<-factor(c(rep('nn', 9), rep('other', 10), rep('nn', 5), rep('other', 5)))
+mod<-model.matrix(~0+s)
+print(head(mod, n = 25))
+```
+
+Fit a model : make comparisons
+===
+```{r}
+fit1<-lmFit(cf.norm, mod)
+contr<-makeContrasts(snn-sother, levels=mod)
+fit2<-contrasts.fit(fit = fit1, contrasts = contr)
+fit3<-eBayes(fit2)
+```
+
+Limma function : output differential expression tables
+===
+```{r}
+topTable(fit3)
+```
+
+Limma function : output differential expression tables (2)
+===
+```{r,echo = T, results = 'hide'}
+print(xtable(topTable(fit3, number = 8, adjust.method = "BH", sort.by = "p"), digits = c(0, 2, 2, 2, -2, -2, 2)), type="html")
+tab<-topTable(fit3, number = 3e6, adjust.method = "BH", sort.by = "p")
+pr<-row.names(tab)
+sy<-getSYMBOL(pr, data = "hgu133plus2.db")
+df<-data.frame(Symbol = sy, tab)
+print(xtable(head(df, n = 8), digits = c(0, 0, 2, 2, 2, -2, -2, 2)), type='html')
+
+```
+More infomartions on our output 
+===
+```{r, echo=TRUE}
+head(df)
+```
+
+Visualizing microarray data : heatmap
+====
+```{r,echo=TRUE}
+df.subset<-df[1:30,]
+ex<-exprs(cf.norm)[row.names(df.subset),]
+sy.subset<-df.subset$Symbol
+heatmap.2(ex, trace = "none", scale="row", margins = c(10, 7), col = colorRampPalette(c("red", "black", "green")), labRow = sy.subset)
+
+```
+
+Visualizing microarray data : plot
+====
+```{r,echo=TRUE}
+dr<-data.frame(S1=exprs(cf.norm)[,1], S2=exprs(cf.norm)[,4])
+m<-ggplot(dr, aes(x=S1, y=S2))
+m<-m+geom_point()
+m<-m+theme_classic(base_size = 12)
+m
+```
+
+
+Visualizing microarray data : Volcano plot
+====
+```{r,echo=TRUE}
+dat<-data.frame(df, n_log10_adj_pval = -c(log10(df$adj.P.Val)))
+a<-ggplot(dat, aes(x = logFC, y = n_log10_adj_pval))
+a<-a+ylab("-log10(adjusted P value)\n")
+a<-a+xlab("logFC")
+a<-a+theme_classic(base_size = 12)
+a<-a+theme(legend.position="none")
+a<-a+scale_color_manual(values = wes_palette("Cavalcanti1")[c(1, 3, 5)])
+a<-a+geom_point()
+plot(a)
+```
+
+Volcano plot : FC>2 & p<0,01 
+====
+```{r,echo=TRUE}
+dat<-data.frame(df, n_log10_adj_pval = -c(log10(df$adj.P.Val)), col=ifelse(abs(df$logFC)>2 & df$adj.P.Val<0.01, 'A', ifelse(abs(df$logFC)>2, 'B', 'C')))
+dat$Symbol<-c(as.character(dat$Symbol[1]),  rep(NA, 6), as.character(dat$Symbol[8]), rep(NA, 36), as.character(dat$Symbol[45]), rep(NA, length(dat$Symbol)-45))
+a<-ggplot(dat, aes(x = logFC, y = n_log10_adj_pval, col=col, label=Symbol))
+a<-a+ylab("-log10(adjusted P value)\n")
+a<-a+xlab("logFC")
+a<-a+theme_classic(base_size = 12)
+a<-a+theme(legend.position="none")
+a<-a+scale_color_manual(values = wes_palette("Cavalcanti1")[c(5, 3, 1)])
+a<-a+geom_point()
+a<-a+geom_vline(xintercept=c(2, -2))
+a<-a+geom_hline(yintercept = -log10(0.01))
+a<-a+geom_label()
+plot(a)
+
+```
+
+Visualizing microarray data ; select individual components
+===
+```{r,echo=TRUE}
+rn<-row.names(df)[which(sy=="CPA3")]
+ex<-exprs(cf.norm)[rn,]
+if(!is.vector(ex)){
+  varfilter<-apply(ex, 1, var)
+  ex<-ex[which.max(varfilter),]
+}
+pl<-data.frame(Intensity = ex, Phenotype = s)
+a<-ggplot(pl, aes(y = Intensity, x = Phenotype, fill = Phenotype))
+a<-a+theme_classic(base_size = 16)
+a<-a+scale_y_log10(breaks=c(1, 2, 4, 6, 8, 10, 12))
+a<-a+ggtitle("CPA3 Expression\n")
+a<-a+ylab("Log2 Intensity")
+a<-a+xlab('')
+a<-a+scale_fill_manual(values = wes_palette("GrandBudapest1")[c(1,4)], guide=FALSE)
+a<-a+scale_x_discrete(labels=c('CD44+\nCD24-', 'Other'))
+a<-a+geom_boxplot()
+plot(a)
+```
+
+Visualizing microarray data ; select individual components (2)
+===
+```{r,echo=TRUE}
+rn<-row.names(df)[which(sy=="TPSB2")]
+ex<-exprs(cf.norm)[rn,]
+if(!is.vector(ex)){
+  varfilter<-apply(ex, 1, var)
+  ex<-ex[which.max(varfilter),]
+}
+pl<-data.frame(Intensity = ex, Phenotype = s)
+a<-ggplot(pl, aes(y = Intensity, x = Phenotype, fill = Phenotype))
+a<-a+theme_classic(base_size = 16)
+a<-a+scale_y_log10(breaks=c(1, 2, 4, 6, 8, 10, 12))
+a<-a+ggtitle("TPSB2 Expression\n")
+a<-a+ylab("Log2 Intensity")
+a<-a+xlab('')
+a<-a+scale_fill_manual(values = wes_palette("GrandBudapest1")[c(1,4)], guide=FALSE)
+a<-a+scale_x_discrete(labels=c('CD44+\nCD24-', 'Other'))
+a<-a+geom_boxplot()
+plot(a)
+```
+
+Gene set enrichment using the topGO package
+===
+```{r}
+selectDiff<-function(x){
+  return(x <= 0.01)
+}
+gVec<-df$adj.P.Val
+names(gVec)<-row.names(df)
+tG<-new("topGOdata", ontology="BP", allGenes = gVec, annot = annFUN.db, geneSel = selectDiff, affyLib = "hgu133plus2", nodeSize = 10)
+print(tG)
+
+
+```
+
+Gene set enrichment using the topGO package
+===
+Find pathway of genes
+```{r,echo = T, results = 'hide'}
+elim <- runTest(tG, algorithm = "elim", statistic = "ks")
+weight01 <- runTest(tG, algorithm = "weight01", statistic = "ks")
+tabGO<-GenTable(object = tG, Elim = elim, Weight = weight01, orderBy = "Weight", ranksOf = "Elim", topNodes = 20)
+
+print(xtable(tabGO[1:4,], digits=c(0, 0, 0, 0, 0, 0, 0, -2, -2)), type = "html")
+kable(head(tabGO))
+```
+
+Gene set enrichment using the topGO package
+===
+```{r}
+kable(head(tabGO))
+```
+
+
